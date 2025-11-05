@@ -122,9 +122,40 @@ services:
       - elasticsearch
     restart: unless-stopped
 
+  elastic-agent:
+    image: docker.elastic.co/beats/elastic-agent:${ELASTIC_VERSION}
+    container_name: elastic-agent
+    user: root
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+      - kibana
+    environment:
+      - FLEET_SERVER_ENABLE=true
+      - FLEET_SERVER_SERVICE_TOKEN=${FLEET_SERVER_SERVICE_TOKEN}
+      - FLEET_SERVER_POLICY=fleet-server-policy
+      - FLEET_SERVER_PORT=8220
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - KIBANA_FLEET_SETUP=1
+      - KIBANA_FLEET_USERNAME=elastic
+      - KIBANA_FLEET_PASSWORD=1qaz2wsx
+    volumes:
+      - ./elastic-agent/elastic-agent.yml:/usr/share/elastic-agent/elastic-agent.yml:ro
+      - elastic-agent-data:/usr/share/elastic-agent/data
+      - /home/cape/Documents:/usr/share/elastic-agent/data/fortigate_logs
+
+    ports:
+      - "9004:9004/udp"  # FortiGate syslog UDP port
+      - "9005:9005/tcp"  # Optional TCP port
+      - "8220:8220"
+
+
 networks:
   elk:
     driver: bridge
 
 volumes:
   elasticsearch:
+  elastic-agent-data:
+

@@ -1,0 +1,32 @@
+outputs:
+  default:
+    type: elasticsearch
+    hosts: ["http://elasticsearch:9200"]
+    username: elastic
+    password: 1qaz2wsx
+
+agent:
+  monitoring:
+    enabled: true
+    logs: true
+    metrics: true
+
+inputs:
+  - type: udp
+    id: fortigate-udp
+    use_output: default
+    streams:
+      - data_stream:
+          dataset: fortinet.firewall
+          type: logs
+    listen_address: 0.0.0.0
+    listen_port: 9004
+  - type: tcp
+    id: fortigate-tcp
+    use_output: default
+    streams:
+      - data_stream:
+          dataset: fortinet.firewall
+          type: logs
+    listen_address: 0.0.0.0
+    listen_port: 9005
