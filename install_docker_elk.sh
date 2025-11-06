@@ -53,6 +53,10 @@ else
   exit 1
 fi
 
+echo "把自己加入 docker 群組（免 sudo）..."
+sudo usermod -aG docker $USER
+newgrp docker
+
 echo "🧱 建立 docker-elk 初始服務..."
 docker compose up setup
 
@@ -69,3 +73,4 @@ echo "✅ 安裝完成！"
 echo "📊 請稍候數十秒後打開 http://127.0.0.1:5601"
 echo "🔎 可查看日誌：tail -f $LOG_FILE"
 echo "=============================================="
+
