@@ -122,34 +122,47 @@ services:
       - elasticsearch
     restart: unless-stopped
 
+  fleet-server:
+    image: docker.elastic.co/beats/elastic-agent:${ELASTIC_VERSION}
+    container_name: fleet-server
+    networks:
+      - elk
+    environment:
+      - FLEET_SERVER_ENABLE=true
+      - FLEET_SERVER_ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - FLEET_SERVER_SERVICE_TOKEN=AAEAAWVsYXN0aWMvZmxlZXQtc2VydmVyL3Rva2VuLTE3NjIzODc0MzkwODk6SllxcUZQTkdSQ3lWcDJka0J6djFHUQ
+      - FLEET_SERVER_POLICY_ID=fleet-server-policy
+      - KIBANA_FLEET_SETUP=1
+      - KIBANA_HOST=http://kibana:5601
+      - KIBANA_FLEET_USERNAME=elastic
+      - KIBANA_FLEET_PASSWORD=1qaz2wsx
+    ports:
+      - "8220:8220"
+    volumes:
+      - fleet-server-data:/usr/share/fleet-server/dat
+      - /home/cape/Documents:/usr/share/elastic-agent/data/fortigate_logs:ro
+    restart: unless-stopped
+
+
   elastic-agent:
     image: docker.elastic.co/beats/elastic-agent:${ELASTIC_VERSION}
     container_name: elastic-agent
-    user: root
+    #user: root
     networks:
       - elk
     depends_on:
+      - fleet-server
       - elasticsearch
       - kibana
     environment:
-      - FLEET_SERVER_ENABLE=true
-      - FLEET_SERVER_SERVICE_TOKEN=${FLEET_SERVER_SERVICE_TOKEN}
-      - FLEET_SERVER_POLICY=fleet-server-policy
-      - FLEET_SERVER_PORT=8220
-      - ELASTICSEARCH_HOST=http://elasticsearch:9200
-      - KIBANA_FLEET_SETUP=1
-      - KIBANA_FLEET_USERNAME=elastic
-      - KIBANA_FLEET_PASSWORD=1qaz2wsx
+      - FLEET_ENROLL=1
+      - FLEET_URL=https://fleet-server:8220
+      - FLEET_ENROLLMENT_TOKEN=cHB4OVZwb0JPUXVnbnpOV3pNMTM6S0RVMGJiQ294dzRLaTc0aHA4TWwyZw==
+      - FLEET_INSECURE=true
     volumes:
-      - ./elastic-agent/elastic-agent.yml:/usr/share/elastic-agent/elastic-agent.yml:ro
       - elastic-agent-data:/usr/share/elastic-agent/data
-      - /home/cape/Documents:/usr/share/elastic-agent/data/fortigate_logs
-
-    ports:
-      - "9004:9004/udp"  # FortiGate syslog UDP port
-      - "9005:9005/tcp"  # Optional TCP port
-      - "8220:8220"
-
+      - /home/cape/Documents:/usr/share/elastic-agent/data/fortigate_logs:ro
+    restart: unless-stopped
 
 networks:
   elk:
@@ -158,4 +171,4 @@ networks:
 volumes:
   elasticsearch:
   elastic-agent-data:
-
+  fleet-server-data:
