@@ -30,7 +30,7 @@ xpack.reporting.encryptionKey: "536749f5d9be64803d8f0822b80126d4c45729f8c999d1e6
 ## Fleet
 ## https://www.elastic.co/docs/reference/kibana/configuration-reference/fleet-settings
 #
-xpack.fleet.agents.fleet_server.hosts: [ http://fleet-server:8220 ]
+xpack.fleet.agents.fleet_server.hosts: [ https://fleet-server:8220 ]
 
 xpack.fleet.outputs:
   - id: fleet-default-output
