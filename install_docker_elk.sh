@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =========================================================
 # 🚀 Ubuntu 24.04 - Docker + docker-elk 一鍵安裝/啟動腳本（含日誌資料夾建立）
-# Author: waason (revised + folders)
+# Author: waason (revised + folders + optional health check + auto latest)
 # =========================================================
 set -Eeuo pipefail
 
@@ -33,9 +33,22 @@ pause_dot() {
   for i in {1..3}; do printf "."; sleep 0.3; done; echo
 }
 
-# ----------- 互動輸入 -----------
-read -rp "🔢 請輸入要安裝的 Elastic Stack 版本 (預設 9.0.3)： " ELK_VER_IN
-ELK_VER="${ELK_VER_IN:-9.0.3}"
+# ----------- 嘗試偵測 Elastic 最新 GA 版本 -----------
+echo "🔎 嘗試偵測 Elastic Stack 最新 GA 版本..."
+LATEST_ELK="$(curl -fsSL https://artifacts-api.elastic.co/v1/versions 2>/dev/null \
+  | jq -r '.versions[]' 2>/dev/null \
+  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+  | sort -V | tail -n1 || true)"
+if [[ -z "${LATEST_ELK:-}" ]]; then
+  LATEST_ELK="9.0.3"  # 後援預設
+  echo "⚠️ 自動偵測失敗，使用後援預設版本：${LATEST_ELK}"
+else
+  echo "✅ 偵測到最新 GA 版本：${LATEST_ELK}"
+fi
+
+# ----------- 互動輸入（版本與密碼）-----------
+read -rp "🔢 請輸入要安裝的 Elastic Stack 版本（預設最新：${LATEST_ELK}）： " ELK_VER_IN
+ELK_VER="${ELK_VER_IN:-$LATEST_ELK}"
 
 echo -n "🔐 請輸入 Elasticsearch『elastic』使用者密碼： "
 read -rs ELASTIC_PASSWORD; echo
@@ -105,7 +118,7 @@ else
 fi
 
 # ----------- 設定 .env 版本與密碼 -----------
-echo "🧾 設定 .env 版本與密碼..."
+echo "🧾 寫入 .env（版本與密碼）..."
 touch .env
 sed -i '/^ELK_VERSION=/d' .env || true
 sed -i '/^ELASTIC_VERSION=/d' .env || true
@@ -136,34 +149,52 @@ $COMPOSE build
 echo "🚀 以背景模式啟動所有服務..."
 $COMPOSE up -d
 
-echo "🔍 檢查容器狀態..."
+# ----------- 檢查容器狀態（立即顯示一次）-----------
+echo
+echo "📦 目前容器："
 $COMPOSE ps
 
-# ----------- 健康檢查 -----------
-echo "🩺 叢集健康檢查（可能需等待數十秒）..."
-set +e
-ES_VER=""
-for i in {1..30}; do
-  ES_VER=$($DOCKER run --rm --network "$(basename "$(pwd)")_elk" curlimages/curl:8.9.1 \
-    -s -u "elastic:${ELASTIC_PASSWORD}" http://elasticsearch:9200 | jq -r '.version.number' 2>/dev/null)
-  if [[ -n "${ES_VER}" && "${ES_VER}" != "null" ]]; then
-    break
-  fi
-  printf "  ⏳ 等待 Elasticsearch 起來中... (%d/30)" "$i"; pause_dot
-  sleep 4
-done
-set -e
+# ----------- 健康檢查（可選）-----------
+echo
+CHECK_CHOICE="${AUTO_CHECK_HEALTH:-}"
+if [[ -z "${CHECK_CHOICE}" ]]; then
+  read -rp "🩺 要執行 Elasticsearch/Kibana 健康檢查嗎？(y/N) " CHECK_CHOICE || true
+fi
+CHECK_CHOICE="$(echo "${CHECK_CHOICE:-n}" | tr '[:upper:]' '[:lower:]')"
 
-if [[ -z "${ES_VER}" || "${ES_VER}" == "null" ]]; then
-  echo "❌ 無法取得 Elasticsearch 版本，請檢查："
-  echo "   - elastic 密碼是否正確"
-  echo "   - elasticsearch 容器是否啟動成功：$COMPOSE logs elasticsearch"
-  exit 2
+if [[ "${CHECK_CHOICE}" == "y" || "${CHECK_CHOICE}" == "yes" ]]; then
+  echo "🩺 叢集健康檢查（可能需等待數十秒）..."
+  set +e
+  ES_VER=""
+  for i in {1..30}; do
+    ES_VER=$($DOCKER run --rm --network "$(basename "$(pwd)")_elk" curlimages/curl:8.9.1 \
+      -s -u "elastic:${ELASTIC_PASSWORD}" http://elasticsearch:9200 | jq -r '.version.number' 2>/dev/null)
+    if [[ -n "${ES_VER}" && "${ES_VER}" != "null" ]]; then
+      break
+    fi
+    printf "  ⏳ 等待 Elasticsearch 起來中... (%d/30)" "$i"; pause_dot
+    sleep 4
+  done
+  set -e
+
+  if [[ -n "${ES_VER}" && "${ES_VER}" != "null" ]]; then
+    echo "✅ Elasticsearch 版本：${ES_VER}"
+  else
+    echo "⚠️ 未能確認 Elasticsearch 版本，可能仍在啟動或認證失敗。"
+    echo "   手動檢查："
+    echo "   $DOCKER run --rm --network $(basename \"$(pwd)\")_elk curlimages/curl:8.9.1 -s -u \"elastic:\$ELASTIC_PASSWORD\" http://elasticsearch:9200 | jq ."
+    echo "   $COMPOSE logs elasticsearch"
+  fi
+else
+  echo "⏭️ 已依選擇略過健康檢查。"
+  echo "   你可稍後手動檢查："
+  echo "   $COMPOSE ps"
+  echo "   $DOCKER run --rm --network $(basename \"$(pwd)\")_elk curlimages/curl:8.9.1 -s -u \"elastic:\$ELASTIC_PASSWORD\" http://elasticsearch:9200 | jq ."
 fi
 
-echo "✅ Elasticsearch 版本：${ES_VER}"
+echo
 echo "👉 Kibana UI： http://127.0.0.1:5601"
 echo "   elastic 密碼已套用（依你剛才輸入）"
-echo "📜 你可以隨時檢視日誌：tail -f $LOG_FILE"
+echo "📜 你可以隨時檢視日誌： tail -f \"$LOG_FILE\""
 echo "=============================================="
 echo "🎉 完成！如要在『本次登入』就能免 sudo 使用 docker，請手動執行： newgrp docker"
