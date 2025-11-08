@@ -25,7 +25,7 @@ Other available stack variants:
 
 ---
 
-## tl;dr
+## 啟動方式
 
 ```sh
 docker compose up setup
