@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # =========================================================
 # 🚀 Ubuntu 24.04 - Docker + docker-elk 一鍵安裝/啟動腳本（含日誌資料夾建立）
-# Author: waason (revised + folders + optional health check + auto latest)
+# Author: waason (revised + folders + optional health check + auto latest, Ubuntu 24 fixed)
 # =========================================================
 set -Eeuo pipefail
 
 LOG_FILE="install_docker_elk_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
+export DEBIAN_FRONTEND=noninteractive
 
 echo "=============================================="
 echo "🐳 Docker + docker-elk 安裝啟動腳本開始"
@@ -33,7 +34,13 @@ pause_dot() {
   for i in {1..3}; do printf "."; sleep 0.3; done; echo
 }
 
-# ----------- 嘗試偵測 Elastic 最新 GA 版本 -----------
+# ----------- 先安裝偵測所需工具（curl/jq）-----------
+wait_for_apt_unlock
+echo "📦 更新系統套件（先確保 curl/jq 可用）..."
+sudo apt update -y
+sudo apt install -y ca-certificates curl gnupg lsb-release jq
+
+# ----------- 偵測 Elastic 最新 GA 版本 -----------
 echo "🔎 嘗試偵測 Elastic Stack 最新 GA 版本..."
 LATEST_ELK="$(curl -fsSL https://artifacts-api.elastic.co/v1/versions 2>/dev/null \
   | jq -r '.versions[]' 2>/dev/null \
@@ -55,19 +62,12 @@ read -rs ELASTIC_PASSWORD; echo
 echo -n "🔐 請輸入 Kibana『kibana_system』使用者密碼（可與上面相同）： "
 read -rs KIBANA_PASSWORD; echo
 
-# ----------- 系統更新 / 安裝 Docker -----------
-wait_for_apt_unlock
-echo "📦 更新系統套件..."
-sudo apt update -y
-sudo apt install -y ca-certificates curl gnupg lsb-release jq
-
+# ----------- 安裝 Docker（Ubuntu 24.04 相容）-----------
 if ! command -v docker >/dev/null 2>&1; then
-  echo "🔑 新增 Docker 官方 GPG 金鑰..."
+  echo "🔑 新增 Docker 官方 GPG 金鑰與 Repo..."
   sudo install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-  echo "🧩 加入 Docker 軟體倉庫..."
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
 
@@ -117,18 +117,20 @@ else
   exit 1
 fi
 
-# ----------- 設定 .env 版本與密碼 -----------
+# ----------- 寫入 .env（版本與密碼，安全轉義）-----------
 echo "🧾 寫入 .env（版本與密碼）..."
 touch .env
 sed -i '/^ELK_VERSION=/d' .env || true
 sed -i '/^ELASTIC_VERSION=/d' .env || true
 sed -i '/^ELASTIC_PASSWORD=/d' .env || true
 sed -i '/^KIBANA_PASSWORD=/d' .env || true
+
+# 使用 bash %q 確保特殊字元安全寫入（Ubuntu 24 的 bash 支援）
 {
-  echo "ELK_VERSION=${ELK_VER}"
-  echo "ELASTIC_VERSION=${ELK_VER}"
-  echo "ELASTIC_PASSWORD=${ELASTIC_PASSWORD}"
-  echo "KIBANA_PASSWORD=${KIBANA_PASSWORD}"
+  printf 'ELK_VERSION=%s\n' "${ELK_VER}"
+  printf 'ELASTIC_VERSION=%s\n' "${ELK_VER}"
+  printf 'ELASTIC_PASSWORD=%q\n' "${ELASTIC_PASSWORD}"
+  printf 'KIBANA_PASSWORD=%q\n' "${KIBANA_PASSWORD}"
 } >> .env
 echo "✅ 已寫入 .env（密碼不顯示在輸出）"
 
