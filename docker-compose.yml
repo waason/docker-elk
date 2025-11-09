@@ -160,6 +160,7 @@ services:
     volumes:
       - elastic-agent-state:/usr/share/elastic-agent/state
       - /home/cape/Documents/fortigate_logs:/data/fortigate_logs:ro
+      - /home/cape/Documents/fortigate_logs:/data/win_evtx_log:ro
     restart: unless-stopped
 
 networks:
