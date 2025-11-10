@@ -159,6 +159,7 @@ services:
       - FLEET_INSECURE=true
     volumes:
       - elastic-agent-state:/usr/share/elastic-agent/state
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - /home/cape/Documents/fortigate_logs:/data/fortigate_logs:ro
       - /home/cape/Documents/fortigate_logs:/data/win_evtx_log:ro
     restart: unless-stopped
