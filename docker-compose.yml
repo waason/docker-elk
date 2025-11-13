@@ -136,10 +136,12 @@ services:
       - KIBANA_HOST=http://kibana:5601
       - KIBANA_FLEET_USERNAME=elastic
       - KIBANA_FLEET_PASSWORD=1qaz2wsx
+      - DOCKER_HOST=unix:///var/run/docker.sock
     ports:
       - "8220:8220"
     volumes:
       - fleet-server-state:/usr/share/elastic-agent/state
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 
 
