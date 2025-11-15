@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =========================================================
-# 🚀 Ubuntu 24.04 - Docker + docker-elk 一鍵安裝/啟動腳本（預設 9.2.0）
-# Author: waason (re-authored for 9.2.0 default)
+# 🚀 Ubuntu 24.04 - Docker + docker-elk + Fleet Offline Agent 9.2.0
+#     完整安裝腳本 (無最後檢查程序，包含離線 agent 下載)
 # =========================================================
 set -Eeuo pipefail
 
@@ -10,18 +10,17 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 export DEBIAN_FRONTEND=noninteractive
 
 echo "=============================================="
-echo "🐳 Docker + docker-elk 安裝啟動腳本開始"
+echo "🐳 Docker + docker-elk 安裝腳本開始"
 echo "📅 $(date)"
-echo "📂 Log 檔案：$LOG_FILE"
+echo "📂 Log：$LOG_FILE"
 echo "=============================================="
 
-# ----------- 工具函式 -----------
+# ----------- 函式 -----------
 wait_for_apt_unlock() {
-  echo "⏳ 等待 apt/dpkg 解除鎖定..."
   while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
         sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
         sudo fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
-    echo "⚠️ 其他 apt 進程執行中，稍後重試..."
+    echo "⏳ apt 被鎖定，等待中..."
     sleep 5
   done
 }
@@ -30,59 +29,45 @@ in_group() {
   id -nG "$USER" | tr ' ' '\n' | grep -qx "$1"
 }
 
-pause_dot() {
-  for i in {1..3}; do printf "."; sleep 0.3; done; echo
-}
-
-# ----------- 先安裝偵測所需工具（curl/jq）-----------
+# ----------- 基本工具 -----------
+echo "📦 安裝必要工具 curl / jq..."
 wait_for_apt_unlock
-echo "📦 更新系統套件（先確保 curl/jq 可用）..."
 sudo apt update -y
-sudo apt install -y ca-certificates curl gnupg lsb-release jq
+sudo apt install -y ca-certificates curl gnupg lsb-release jq wget
 
-# ----------- 預設版本（固定 9.2.0）與線上偵測 -----------
-DEFAULT_ELK="9.2.0"
-echo "🔎 嘗試偵測 Elastic Stack 最新 GA 版本（僅作參考，預設仍為 ${DEFAULT_ELK})..."
-LATEST_ELK="$(curl -fsSL https://artifacts-api.elastic.co/v1/versions 2>/dev/null \
-  | jq -r '.versions[]' 2>/dev/null \
-  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-  | sort -V | tail -n1 || true)"
-if [[ -z "${LATEST_ELK:-}" ]]; then
-  LATEST_ELK="${DEFAULT_ELK}"
-  echo "⚠️ 自動偵測失敗，使用預設版本：${DEFAULT_ELK}"
-else
-  echo "✅ 偵測到最新 GA 版本：${LATEST_ELK}（僅供參考）"
-fi
+# Elastic Stack 版本固定
+ELK_VER="9.2.0"
+echo "ℹ️ 使用 Elastic Stack 版本：${ELK_VER}"
 
-# ----------- 互動輸入（版本與密碼）-----------
-read -rp "🔢 請輸入要安裝的 Elastic Stack 版本（預設：${DEFAULT_ELK}）： " ELK_VER_IN
-ELK_VER="${ELK_VER_IN:-$DEFAULT_ELK}"
-
-echo -n "🔐 請輸入 Elasticsearch『elastic』使用者密碼： "
+# ----------- 密碼輸入 -----------
+echo -n "🔐 請輸入 Elasticsearch『elastic』密碼： "
 read -rs ELASTIC_PASSWORD; echo
-echo -n "🔐 請輸入 Kibana『kibana_system』使用者密碼（可與上面相同）： "
+echo -n "🔐 請輸入 Kibana『kibana_system』密碼（可相同）： "
 read -rs KIBANA_PASSWORD; echo
 
-# ----------- 安裝 Docker（Ubuntu 24.04 相容）-----------
+# ----------- Docker 安裝 -----------
 if ! command -v docker >/dev/null 2>&1; then
-  echo "🔑 新增 Docker 官方 GPG 金鑰與 Repo..."
+  echo "🐳 安裝 Docker..."
   sudo install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   sudo chmod a+r /etc/apt/keyrings/docker.gpg
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+    https://download.docker.com/linux/ubuntu \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
 
   wait_for_apt_unlock
-  echo "⚙️ 安裝 Docker Engine/CLI/Compose plugin..."
   sudo apt update -y
   sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 else
-  echo "✅ 已安裝 Docker。"
+  echo "✅ Docker 已存在，略過安裝"
 fi
 
-# ----------- docker 權限（不阻塞腳本）-----------
+# docker 群組
 if ! in_group docker; then
-  echo "👤 將 $USER 加入 docker 群組（下次登入生效；本次腳本以 sudo docker 執行）..."
+  echo "👤 將使用者加入 docker 群組（下次登入生效）..."
   sudo groupadd docker 2>/dev/null || true
   sudo usermod -aG docker "$USER" || true
   DOCKER="sudo docker"
@@ -91,113 +76,83 @@ else
 fi
 COMPOSE="$DOCKER compose"
 
-echo "✅ Docker 版本：$($DOCKER --version)"
-echo "✅ Compose 版本：$($DOCKER compose version)"
+# ----------- 建立 FortiGate / Windows Log 資料夾 -----------
+echo "📂 建立 FortiGate / Windows EVTX 目錄..."
 
-# ----------- 建立 FortiGate / Windows EVTX 日誌資料夾 -----------
-echo "🗂️ 建立 FortiGate 與 Windows EVTX 日誌資料夾..."
-FGT_DIR="/home/$USER/Documents/fortigate_logs"
-EVTX_DIR="/home/$USER/Documents/win_evtx_log"
+FGT_DIR="/home/cape/Documents/fortigate_logs"
+EVTX_DIR="/home/cape/Documents/win_evtx_log"
 
-sudo install -d -m 2775 -o "$USER" -g docker "$FGT_DIR" "$EVTX_DIR" 2>/dev/null || \
-  sudo install -d -m 2775 -o "$USER" "$FGT_DIR" "$EVTX_DIR"
-
-if getent group docker >/dev/null 2>&1; then
-  sudo chgrp docker "$FGT_DIR" "$EVTX_DIR" || true
-fi
+sudo install -d -m 2775 -o "$USER" -g docker "$FGT_DIR" "$EVTX_DIR" || true
 sudo chmod 2775 "$FGT_DIR" "$EVTX_DIR"
-echo "✅ 目錄建立完成："
-ls -ld "$FGT_DIR" "$EVTX_DIR"
 
-# ----------- 進入專案 -----------
-if [ -d "$HOME/docker-elk" ]; then
-  cd "$HOME/docker-elk"
-  echo "📂 切換目錄到 ~/docker-elk"
+echo "✅ 已建立："
+ls -ld "$FGT_DIR" "$EVTX_DIR" || true
+
+# ----------- 進入 docker-elk 專案 -----------
+cd "$HOME/docker-elk" || { echo "❌ 找不到 ~/docker-elk"; exit 1; }
+
+# ----------- 離線 Agent 目錄 + 自動下載 -----------
+echo "📂 建立 fleet-static-agent-offline 目錄..."
+
+OFFLINE_AGENT_DIR="$(pwd)/fleet-static-agent-offline"
+OFFLINE_AGENT_TAR="${OFFLINE_AGENT_DIR}/elastic-agent-${ELK_VER}-linux-x86_64.tar.gz"
+OFFLINE_AGENT_URL="https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-${ELK_VER}-linux-x86_64.tar.gz"
+
+sudo install -d -m 775 -o "$USER" -g "$USER" "$OFFLINE_AGENT_DIR"
+
+echo "📌 離線 Agent 目錄：$OFFLINE_AGENT_DIR"
+echo "📌 預期離線檔案：$OFFLINE_AGENT_TAR"
+
+if [ -f "$OFFLINE_AGENT_TAR" ]; then
+  echo "✅ 已存在離線 Agent 檔案，略過下載"
 else
-  echo "⚠️ 找不到 ~/docker-elk，開始 Clone 官方專案..."
-  git clone https://github.com/deviantony/docker-elk.git "$HOME/docker-elk"
-  cd "$HOME/docker-elk"
+  echo "📥 下載 Elastic Agent ${ELK_VER} 離線檔案..."
+  echo "    來源：$OFFLINE_AGENT_URL"
+  echo "    目標：$OFFLINE_AGENT_TAR"
+  wget -O "$OFFLINE_AGENT_TAR" "$OFFLINE_AGENT_URL"
+  echo "✅ 下載完成"
 fi
 
-# ----------- 寫入 .env（版本與密碼，安全轉義）-----------
-echo "🧾 寫入 .env（版本與密碼）..."
+# ----------- 寫入 .env -----------
+echo "🧾 更新 .env..."
+
 touch .env
+
 sed -i '/^ELK_VERSION=/d' .env || true
 sed -i '/^ELASTIC_VERSION=/d' .env || true
 sed -i '/^ELASTIC_PASSWORD=/d' .env || true
 sed -i '/^KIBANA_PASSWORD=/d' .env || true
+sed -i '/^FLEET_URL=/d' .env || true
+sed -i '/^FLEET_STATIC_AGENT_URL=/d' .env || true
 
 {
-  printf 'ELK_VERSION=%s\n' "${ELK_VER}"
-  printf 'ELASTIC_VERSION=%s\n' "${ELK_VER}"
-  printf 'ELASTIC_PASSWORD=%q\n' "${ELASTIC_PASSWORD}"
-  printf 'KIBANA_PASSWORD=%q\n' "${KIBANA_PASSWORD}"
+  echo "ELK_VERSION=${ELK_VER}"
+  echo "ELASTIC_VERSION=${ELK_VER}"
+  echo "ELASTIC_PASSWORD=${ELASTIC_PASSWORD}"
+  echo "KIBANA_PASSWORD=${KIBANA_PASSWORD}"
+  echo "FLEET_URL=http://kibana:5601"
+  echo "FLEET_STATIC_AGENT_URL=https://fleet-server:8220/static/agent/"
 } >> .env
-echo "✅ 已寫入 .env（密碼不顯示在輸出）"
 
-# ----------- 修正 elastic-agent 映像路徑（9.x）-----------
+echo "✅ .env 已寫入：ELK_VERSION / ELASTIC_VERSION / FLEET_URL / FLEET_STATIC_AGENT_URL"
+
+# ----------- 修正 elastic-agent 映像 -----------
 if grep -q 'docker.elastic.co/beats/elastic-agent' docker-compose*.yml 2>/dev/null; then
-  echo "🛠️ 將 beats/elastic-agent 改為 elastic-agent/elastic-agent（9.x 正確路徑）..."
+  echo "🛠️ 修正 elastic-agent 映像路徑為 9.x 用法..."
   sed -i 's#docker.elastic.co/beats/elastic-agent#docker.elastic.co/elastic-agent/elastic-agent#g' docker-compose*.yml
 fi
 
-# ----------- 拉映像 / 初始化 / 啟動 -----------
-echo "🧱 建立 docker-elk 初始服務..."
+# ----------- 啟動 docker-elk -----------
+echo "🐳 啟動 docker-elk..."
 $COMPOSE pull
 $COMPOSE up setup
-
-echo "🛠️ 建置（如需要）..."
 $COMPOSE build
-
-echo "🚀 以背景模式啟動所有服務..."
 $COMPOSE up -d
 
-# ----------- 檢查容器狀態（立即顯示一次）-----------
-echo
-echo "📦 目前容器："
-$COMPOSE ps
-
-# ----------- 健康檢查（可選）-----------
-echo
-CHECK_CHOICE="${AUTO_CHECK_HEALTH:-}"
-if [[ -z "${CHECK_CHOICE}" ]]; then
-  read -rp "🩺 要執行 Elasticsearch/Kibana 健康檢查嗎？(y/N) " CHECK_CHOICE || true
-fi
-CHECK_CHOICE="$(echo "${CHECK_CHOICE:-n}" | tr '[:upper:]' '[:lower:]')"
-
-if [[ "${CHECK_CHOICE}" == "y" || "${CHECK_CHOICE}" == "yes" ]]; then
-  echo "🩺 叢集健康檢查（可能需等待數十秒）..."
-  set +e
-  ES_VER=""
-  for i in {1..30}; do
-    ES_VER=$($DOCKER run --rm --network "$(basename "$(pwd)")_elk" curlimages/curl:8.9.1 \
-      -s -u "elastic:${ELASTIC_PASSWORD}" http://elasticsearch:9200 | jq -r '.version.number' 2>/dev/null)
-    if [[ -n "${ES_VER}" && "${ES_VER}" != "null" ]]; then
-      break
-    fi
-    printf "  ⏳ 等待 Elasticsearch 起來中... (%d/30)" "$i"; pause_dot
-    sleep 4
-  done
-  set -e
-
-  if [[ -n "${ES_VER}" && "${ES_VER}" != "null" ]]; then
-    echo "✅ Elasticsearch 版本：${ES_VER}"
-  else
-    echo "⚠️ 未能確認 Elasticsearch 版本，可能仍在啟動或認證失敗。"
-    echo "   手動檢查："
-    echo "   $DOCKER run --rm --network $(basename \"$(pwd)\")_elk curlimages/curl:8.9.1 -s -u \"elastic:\$ELASTIC_PASSWORD\" http://elasticsearch:9200 | jq ."
-    echo "   $COMPOSE logs elasticsearch"
-  fi
-else
-  echo "⏭️ 已依選擇略過健康檢查。"
-  echo "   你可稍後手動檢查："
-  echo "   $COMPOSE ps"
-  echo "   $DOCKER run --rm --network $(basename \"$(pwd)\")_elk curlimages/curl:8.9.1 -s -u \"elastic:\$ELASTIC_PASSWORD\" http://elasticsearch:9200 | jq ."
-fi
-
-echo
-echo "👉 Kibana UI： http://127.0.0.1:5601"
-echo "   elastic 密碼已套用（依你剛才輸入）"
-echo "📜 你可以隨時檢視日誌： tail -f \"$LOG_FILE\""
 echo "=============================================="
-echo "🎉 完成！如要在『本次登入』就能免 sudo 使用 docker，請手動執行： newgrp docker"
+echo "🎉 docker-elk + Fleet Static Offline Agent 安裝完成！"
+echo "📁 離線 Agent：${OFFLINE_AGENT_TAR}"
+echo "👉 Kibana: http://127.0.0.1:5601"
+echo "📌 Fleet Agent Binary URL (在 .env)：https://fleet-server:8220/static/agent/"
+echo "📜 安裝 log：$LOG_FILE"
+echo "=============================================="
